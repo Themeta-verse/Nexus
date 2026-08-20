@@ -138,7 +138,8 @@ def run() -> dict[str, Any]:
         processes = start(env, root / "logs-first")
         try:
             health = wait_for("/health")
-            assert health["status"] == "HEALTHY"
+            assert health["status"] in {"READY", "DEGRADED"}
+            assert health["service"] == "nexus-independent"
             assert request("/api/v1/projects")[0] == 401
             assert request("/api/v1/auth/login", "POST", {"email": "owner@operator-proof.local", "password": "wrong-password"})[0] == 401
             login_status, login = request("/api/v1/auth/login", "POST", {"email": "owner@operator-proof.local", "password": password})

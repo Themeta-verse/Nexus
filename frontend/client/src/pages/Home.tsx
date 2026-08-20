@@ -21,7 +21,7 @@ import {
   TerminalSquare,
   UserRound,
 } from "lucide-react";
-import { apiBase, AuditEvent, Capability, clearProductSession, DatabaseInspection, MemoryItem, MissionEvidence, MissionEvent, MissionSummary, nexusApi, Outcome, persistProductSession, ProductHealth, ProductSession, ProviderState, readProductSession } from "@/lib/nexusApi";
+import { apiBase, AuditEvent, Capability, clearProductSession, DatabaseInspection, MemoryItem, MissionEvidence, MissionEvent, MissionSummary, nexusApi, Outcome, persistProductSession, ProductHealth, ProductSession, ProjectContext, ProviderState, readProductSession } from "@/lib/nexusApi";
 
 const capabilities: Array<{ id: Capability; label: string; detail: string; icon: typeof Globe2 }> = [
   { id: "repository.metadata.read", label: "Metadata", detail: "one bounded repository identity read", icon: Radar },
@@ -117,6 +117,8 @@ export default function Home() {
   const [evidence, setEvidence] = useState<MissionEvidence[]>([]);
   const [databaseInspection, setDatabaseInspection] = useState<DatabaseInspection | null>(null);
   const [checkpointCount, setCheckpointCount] = useState(0);
+  const [projectContext, setProjectContext] = useState<ProjectContext | null>(null);
+  const [memoryNote, setMemoryNote] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const selectedCount = selected.length;
@@ -128,19 +130,20 @@ export default function Home() {
       const nextHealth = await (session ? nexusApi.authenticatedHealth() : nexusApi.health());
       setHealth(nextHealth); setHealthError(null);
       if (session && activeProject) {
-        const [nextMissions, nextMemory, nextOutcomes, nextAudit, nextCapabilities, nextProviders] = await Promise.all([
+        const [nextMissions, nextMemory, nextOutcomes, nextAudit, nextCapabilities, nextProviders, nextContext] = await Promise.all([
           nexusApi.listMissions(activeProject), nexusApi.listMemory(activeProject), nexusApi.listOutcomes(activeProject),
-          nexusApi.listAuditEvents(activeProject), nexusApi.listCapabilities(), nexusApi.listProviders(),
+          nexusApi.listAuditEvents(activeProject), nexusApi.listCapabilities(), nexusApi.listProviders(), nexusApi.projectContext(activeProject),
         ]);
         setMissions(nextMissions.missions);
         setMemory(nextMemory.memory); setOutcomes(nextOutcomes.outcomes); setAuditEvents(nextAudit.audit_events);
         setCapabilityStates(nextCapabilities.capabilities); setProviderStates(nextProviders.providers);
+        setProjectContext(nextContext);
         setMission((current) => current ? nextMissions.missions.find((item) => item.mission_id === current.mission_id) ?? current : null);
       }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Independent API unavailable";
       setHealthError(message);
-      if (message.includes("401")) { clearProductSession(); setSession(null); setMissions([]); setMission(null); }
+      if (message.includes("401")) { clearProductSession(); setSession(null); setMissions([]); setMission(null); setProjectContext(null); }
     }
   }, [activeProject, session]);
 
@@ -168,7 +171,7 @@ export default function Home() {
 
   const toggleCapability = (capability: Capability) => setSelected((current) => current.includes(capability) ? current.filter((item) => item !== capability) : [...current, capability]);
   const onAuthenticated = (nextSession: ProductSession) => { setSession(nextSession); setActiveProject(nextSession.projects[0]?.project_id || ""); setError(null); };
-  const logout = async () => { await nexusApi.logout(); setSession(null); setMissions([]); setMission(null); setActiveProject(""); };
+  const logout = async () => { await nexusApi.logout(); setSession(null); setMissions([]); setMission(null); setProjectContext(null); setActiveProject(""); };
 
   const queueMission = async () => {
     if (!session) { setError("Authenticate before creating a governed mission."); return; }
@@ -202,6 +205,12 @@ export default function Home() {
     try { const continued = await nexusApi.continueMission(latestMission.mission_id); setMission(continued.mission); await refresh(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Persisted mission state could not be recovered."); }
   };
+  const updateMemory = async (item: MemoryItem, action: "retire" | "restore" | "annotate") => {
+    if (!activeProject) return;
+    setError(null);
+    try { await nexusApi.updateMemory(activeProject, item.memory_id, action, memoryNote || undefined); setMemoryNote(""); await refresh(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Memory lifecycle update could not be applied."); }
+  };
   useEffect(() => {
     if (!session || !latestMission || terminalStatuses.has(latestMission.status)) { setCheckpointCount(0); return; }
     void nexusApi.listCheckpoints(latestMission.mission_id).then((payload) => setCheckpointCount(payload.checkpoints.length)).catch(() => setCheckpointCount(0));
@@ -230,11 +239,13 @@ export default function Home() {
 
         <section className="hero-panel" id="mission">
           <img src="/assets/nexus-meridian-hero.jpg" alt="Abstract technical survey background" /><div className="hero-veil" />
-          <div className="hero-content"><div className="hero-locator"><EvidenceStamp state="READ ONLY" label="canonical path" /><span>CONTROL ARCHIVE / 02.1</span></div><h1>Queue evidence.<br />Verify the result.</h1><p>The product runtime secures tenant access, persists the queue, and reports worker execution from durable state.</p><div className="hero-facts"><span><StatusMark state={health?.status || "UNKNOWN"} />{health?.status || "API unavailable"}</span><span>{health?.database?.queue?.queued ?? 0} queued / {health?.database?.queue?.leased ?? 0} executing</span><span>{health?.github?.transport || "provider pending"}</span></div><div className="hero-provenance"><span>OBSERVATION SOURCE / SQLITE + CHECKPOINTS</span><span>CONSEQUENTIAL ACTION / NOT EXPOSED</span></div></div>
+          <div className="hero-content"><div className="hero-locator"><EvidenceStamp state={health?.runtime_state?.state || "OFFLINE"} label="runtime truth" /><span>PERSONAL INTELLIGENCE / 02.1</span></div><h1>What should<br />NEXUS accomplish?</h1><p>{projectContext?.current_objective || "State an objective. NEXUS will queue only authorized evidence work and preserve what it learns."}</p><div className="hero-facts"><span><StatusMark state={health?.runtime_state?.state || health?.status || "OFFLINE"} />{health?.runtime_state?.state || health?.status || "API unavailable"}</span><span>{projectContext?.continuity.active_count ?? 0} active / {projectContext?.continuity.blocker_count ?? 0} blocked</span><span>{health?.runtime_state?.reason || "runtime state not yet observed"}</span></div><div className="hero-provenance"><span>OBSERVATION SOURCE / SQLITE + CHECKPOINTS</span><span>CONSEQUENTIAL ACTION / NOT EXPOSED</span></div></div>
         </section>
 
+        {session && <section className="cockpit-context" aria-label="Current project intelligence"><div className="section-heading"><div><div className="heading-line"><EvidenceStamp state={projectContext?.latest_mission?.verification_status || "UNKNOWN"} label="current intelligence" /><span className="mono-label">NOW / DISCOVERED / NEXT</span></div><h2>{projectContext?.current_objective || "No current objective in this project."}</h2></div><span className="selection-count">{projectContext?.continuity.mission_count ?? 0} durable missions</span></div><div className="cockpit-grid"><article><span className="mono-label">NEXUS IS DOING</span><strong>{projectContext?.active_missions.length ? projectContext.active_missions.map((item) => item.status).join(" · ") : "Awaiting an objective"}</strong><p>{watchingExecution ? "Worker state is refreshed from the authenticated API every two seconds." : "No active queue record currently requires execution."}</p></article><article><span className="mono-label">DISCOVERED</span><strong>{projectContext?.discovered.length ?? 0} persisted facts</strong><p>{projectContext?.discovered[0] ? `${projectContext.discovered[0].source} · ${projectContext.discovered[0].reality_state} · ${projectContext.discovered[0].verification_state}` : "No project evidence has been retained yet."}</p></article><article><span className="mono-label">BLOCKERS</span><strong>{projectContext?.blockers.length ? projectContext.blockers.map((item) => item.status).join(" · ") : "None observed"}</strong><p>{projectContext?.blockers[0]?.error || "Failures remain explicit and are never converted into completion."}</p></article><article><span className="mono-label">NEXT</span><strong>{projectContext?.next_action || "Authenticate and select a project."}</strong><p>Derived from durable missions, memory, outcomes, and queue state—not a client-side prediction.</p></article></div></section>}
+
         {!session ? <LoginPanel onAuthenticated={onAuthenticated} /> : <section className="mission-composer" aria-labelledby="mission-title">
-          <div className="section-heading"><div><div className="heading-line"><EvidenceStamp state={health?.authorization_boundary ? "AUTHENTICATED" : "UNKNOWN"} label="tenant scope" /><span className="mono-label">01 / MISSION COMPILER</span></div><h2 id="mission-title">State an outcome, then queue verified evidence.</h2></div><span className="selection-count">{selectedCount.toString().padStart(2, "0")} capabilities selected</span></div>
+          <div className="section-heading"><div><div className="heading-line"><EvidenceStamp state={health?.authorization_boundary ? "AUTHENTICATED" : "UNKNOWN"} label="tenant scope" /><span className="mono-label">01 / OBJECTIVE</span></div><h2 id="mission-title">Tell NEXUS what you want accomplished.</h2></div><span className="selection-count">{selectedCount.toString().padStart(2, "0")} evidence capabilities</span></div>
           <div className="tenant-toolbar"><span className="mono-label">TENANT SCOPE</span><select value={activeProject} onChange={(event) => setActiveProject(event.target.value)} aria-label="Active tenant project">{session.projects.map((project) => <option key={project.project_id} value={project.project_id}>{project.display_name} · {project.role}</option>)}</select>{session.user.role === "owner" && <span className="project-create"><input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="new project" aria-label="New project name" /><button onClick={() => void createProject()} disabled={!projectName.trim()}>create project</button></span>}<span className="live-indicator"><StatusMark state={watchingExecution ? "EXECUTING" : health?.status || "UNKNOWN"} />{watchingExecution ? "live worker watch / 2s" : "durable status sync / 8s"}</span></div>
           <div className="composer-grid"><div className="intent-column"><label htmlFor="mission-intent">Mission command</label><textarea id="mission-intent" value={intent} onChange={(event) => setIntent(event.target.value)} spellCheck={false} /><div className="mode-switch" role="group" aria-label="Mission mode"><button className={mode === "SIMULATION" ? "is-active" : ""} onClick={() => setMode("SIMULATION")}>Simulation</button><button className={mode === "REAL_READ" ? "is-active" : ""} onClick={() => setMode("REAL_READ")}>Real read</button></div><p className="helper-text">Submission creates a durable queue record. A separate read-only worker claims, executes, verifies, and persists the mission.</p></div>
             <div className="capabilities-column" id="evidence"><span className="column-kicker">EVIDENCE SET</span>{capabilities.map((item) => <CapabilityRow key={item.id} item={item} checked={selected.includes(item.id)} onToggle={() => toggleCapability(item.id)} status={providerStates[capabilityStates.find((state) => state.capability === item.id)?.provider || ""]?.status} />)}</div></div>
@@ -250,6 +261,7 @@ export default function Home() {
           <article><div className="heading-line"><EvidenceStamp state={auditEvents.length ? "OBSERVED" : "UNKNOWN"} label="audit" /><span className="mono-label">TENANT-SCOPED</span></div><strong>{auditEvents.length}</strong><p>{auditEvents[0] ? `${auditEvents[0].action} · ${auditEvents[0].outcome}` : "No product audit event yet."}</p></article>
           <article><div className="heading-line"><EvidenceStamp state={Object.values(providerStates).some((provider) => provider.availability) ? "AVAILABLE" : "UNAVAILABLE"} label="fabric" /><span className="mono-label">CAPABILITIES / PROVIDERS</span></div><strong>{capabilityStates.length} / {Object.keys(providerStates).length}</strong><p>{capabilityStates[0] ? `${capabilityStates[0].capability} · ${capabilityStates[0].risk}` : "Provider fabric not available."} {checkpointCount ? `· ${checkpointCount} checkpoint(s)` : ""}</p></article>
         </section>}
+        {session && memory.length > 0 && <section className="memory-lifecycle" aria-label="Inspectable project memory"><div className="section-heading"><div><div className="heading-line"><EvidenceStamp state="PERSISTED" label="memory control" /><span className="mono-label">MEMORY / INSPECTABLE / EDITABLE</span></div><h2>Retain evidence without making it permanent by accident.</h2></div></div><div className="memory-control-row"><input value={memoryNote} onChange={(event) => setMemoryNote(event.target.value)} placeholder="Optional operator note for this memory change" aria-label="Memory lifecycle note" /></div><div className="memory-control-grid">{memory.slice(0, 4).map((item) => <article key={item.memory_id}><span className="mono-label">{item.source} / {item.status}</span><strong>{item.reality_state} · {String(item.content.verification_state || "UNKNOWN")}</strong><p>{item.user_note || `Recorded ${item.freshness_at}`}</p><div className="mission-controls">{item.status === "active" ? <button onClick={() => void updateMemory(item, "retire")}>retire</button> : <button onClick={() => void updateMemory(item, "restore")}>restore</button>}<button onClick={() => void updateMemory(item, "annotate")}>annotate</button></div></article>)}</div></section>}
         {session && latestMission && <section className="mission-timeline" aria-label="API-derived mission timeline"><div className="section-heading"><div><div className="heading-line"><EvidenceStamp state={latestMission.verification_status} label="mission ledger" /><span className="mono-label">02 / EXECUTION TRACE</span></div><h2>Queue, evidence, and verification timeline.</h2></div><span className="selection-count">{timeline.length.toString().padStart(2, "0")} events</span></div><div className="timeline-grid">{timeline.length ? timeline.slice(-6).map((event) => <article key={event.event_id}><span className="mono-label">{event.created_at}</span><strong>{event.event_type}</strong><p>{JSON.stringify(event.payload)}</p></article>) : <p className="empty-ledger">No persisted mission events returned by the API.</p>}</div><div className="timeline-foot"><span>{evidence.length} evidence record(s)</span><span>{evidence.map((item) => item.verification_state || "UNKNOWN").join(" · ") || "NO EVIDENCE"}</span></div></section>}
       </section>
 

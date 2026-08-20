@@ -29,6 +29,8 @@ PROJECT_ROLE_RANK = {"viewer": 1, "operator": 2, "owner": 3}
 class StandaloneMissionService:
     def __init__(self, settings: ProductSettings | None = None):
         self.settings = settings or ProductSettings.from_env()
+        if self.settings.database_url and not self.settings.database_url.startswith("sqlite://"):
+            raise ValueError("DATABASE_URL is configured for an unavailable engine; this product build currently executes only sqlite:// URLs")
         self.settings.ensure_directories()
         self.database = NexusDatabase(self.settings.database_path)
         self.database.migrate()
@@ -162,6 +164,7 @@ class StandaloneMissionService:
 
     def worker_once(self, worker_id: str | None = None) -> dict[str, Any] | None:
         worker_id = worker_id or f"worker-{uuid4()}"
+        self.database.heartbeat_worker(worker_id, "ACTIVE", {"queue": self.database.queue_health()})
         record = self.database.claim_next(worker_id, self.settings.worker_lease_seconds)
         if record is None:
             return None
@@ -190,6 +193,7 @@ class StandaloneMissionService:
             if once:
                 return processed
             if not result:
+                self.database.heartbeat_worker(worker_id, "ACTIVE", {"queue": self.database.queue_health(), "idle": True})
                 time.sleep(self.settings.worker_poll_seconds)
 
     def submit_and_execute(self, principal: dict[str, Any], submission: MissionSubmission) -> dict[str, Any]:
@@ -261,6 +265,19 @@ class StandaloneMissionService:
         self._require_project_role(principal, safe_project, "viewer")
         return self.database.list_memory(principal["tenant_id"], safe_project, limit)
 
+    def update_memory(self, principal: dict[str, Any], project_id: str, memory_id: str, action: str, note: str | None = None) -> dict[str, Any] | None:
+        safe_project = self._safe_project_id(project_id)
+        self._require_project_role(principal, safe_project, "operator")
+        record = self.database.set_memory_lifecycle(principal["tenant_id"], safe_project, memory_id, principal["user_id"], action, note)
+        if record:
+            self.database.add_audit_event(principal["tenant_id"], principal["user_id"], f"memory.{action}", "success", {"memory_id": memory_id, "note_present": bool(note)}, project_id=safe_project)
+        return record
+
+    def project_context(self, principal: dict[str, Any], project_id: str) -> dict[str, Any]:
+        safe_project = self._safe_project_id(project_id)
+        self._require_project_role(principal, safe_project, "viewer")
+        return self.database.project_context(principal["tenant_id"], safe_project)
+
     def list_outcomes(self, principal: dict[str, Any], project_id: str, limit: int = 100) -> list[dict[str, Any]]:
         safe_project = self._safe_project_id(project_id)
         self._require_project_role(principal, safe_project, "viewer")
@@ -306,23 +323,47 @@ class StandaloneMissionService:
     def health(self) -> dict[str, Any]:
         composer = self._composer()
         provider_health = {name: provider.health() for name, provider in composer.providers.items() if hasattr(provider, "health")}
+        database = self.database.health()
+        queue = database["queue"]
+        workers = database["workers"]
+        if database["users"] == 0:
+            lifecycle = "REQUIRES_ATTENTION"
+            reason = "No product owner exists. Bootstrap an owner before mission access is possible."
+        elif queue["failed"]:
+            lifecycle = "REQUIRES_ATTENTION"
+            reason = "One or more missions are in a durable failed state and require operator review."
+        elif (queue["queued"] or queue["leased"]) and workers["active_count"] == 0:
+            lifecycle = "DEGRADED"
+            reason = "Durable mission work is waiting but no active worker heartbeat is present."
+        elif queue["leased"]:
+            lifecycle = "RECOVERING"
+            reason = "A worker holds an active lease; execution or recovery is in progress."
+        else:
+            lifecycle = "READY"
+            reason = "Database is healthy and no blocked durable mission requires action."
         return {
             "service": "nexus-independent",
-            "status": "HEALTHY",
-            "database": self.database.health(),
+            "status": lifecycle,
+            "runtime_state": {"state": lifecycle, "reason": reason, "configured_database_url": self.settings.database_url or f"sqlite:///{self.settings.database_path}", "database_engine": "sqlite", "database_portability": "SQLITE_EXECUTED__POSTGRESQL_UNAVAILABLE"},
+            "database": database,
             "providers": provider_health,
             "real_reads_enabled": self.settings.allow_real_reads,
             "authorization_boundary": "authenticated tenant members may invoke read-only providers only; consequential operations are not exposed",
             "authentication": {"mode": "product-owned-session-bearer", "bootstrap_owner_configured": bool(self.settings.bootstrap_owner_email and self.settings.bootstrap_owner_password), "session_hours": self.settings.session_hours},
-            "queue": {"worker_command": "nexus-independent worker", "lease_seconds": self.settings.worker_lease_seconds, "max_attempts": self.settings.queue_max_attempts},
+            "queue": {"worker_command": "nexus-independent worker", "lease_seconds": self.settings.worker_lease_seconds, "max_attempts": self.settings.queue_max_attempts, "worker_health": workers},
             "github": {"transport": "direct-github-rest", "authentication": "PRODUCT_MANAGED_TOKEN" if self.settings.github_token else "PUBLIC_READ_ONLY"},
         }
 
     def public_health(self) -> dict[str, Any]:
         """Return readiness only; tenant and host details require product authentication."""
+        private = self.health()
         return {
             "service": "nexus-independent",
-            "status": "HEALTHY",
+            "status": private["status"],
             "database": {"status": "HEALTHY"},
             "authorization_boundary": "product authentication and tenant membership are required for mission data",
         }
+
+    def diagnostics(self, principal: dict[str, Any]) -> dict[str, Any]:
+        del principal
+        return self.health()

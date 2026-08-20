@@ -1,5 +1,3 @@
-# Nexus ML Laboratory
-
 # NEXUS Independent
 
 NEXUS is an evidence-first, independently runnable personal intelligence runtime. Its product path is **authenticated API → tenant-scoped durable queue → separate worker → canonical `MissionComposer` → evidence, verification, checkpoints, and SQLite projections**. The repository contains the runtime, API, worker, browser command center, local persistence, and executable acceptance tests.
@@ -43,7 +41,7 @@ For the browser client, copy `frontend/.env.example` to `frontend/.env.local`, s
 
 `NEXUS_GITHUB_TOKEN` is optional for public read endpoints and should be injected only by the product host when authenticated GitHub reads are needed. It is never accepted through mission inputs or returned in receipts. `NEXUS_ALLOWED_FILESYSTEM_ROOT` bounds filesystem evidence. `NEXUS_WEB_ORIGINS` must name the command-center origin in a deployed environment.
 
-Read [`docs/INDEPENDENT-ARCHITECTURE.md`](docs/INDEPENDENT-ARCHITECTURE.md) for the source dependency map, [`docs/OPERATIONS.md`](docs/OPERATIONS.md) for independent operations and backup/restore, [`docs/OPERATOR-RUNTIME-PROOF.md`](docs/OPERATOR-RUNTIME-PROOF.md) for the clean-clone three-process and browser command-center proof, and [`README-INDEPENDENT.md`](README-INDEPENDENT.md) for endpoint detail.
+Read [`docs/ASCENSION-FORENSIC-AUDIT.md`](docs/ASCENSION-FORENSIC-AUDIT.md) for the current source-grounded gap map, [`docs/ASCENSION-OPERATIONS.md`](docs/ASCENSION-OPERATIONS.md) for the cockpit, CLI, container, lifecycle, and database boundary, [`docs/INDEPENDENT-ARCHITECTURE.md`](docs/INDEPENDENT-ARCHITECTURE.md) for the source dependency map, [`docs/OPERATIONS.md`](docs/OPERATIONS.md) for independent operations and backup/restore, [`docs/OPERATOR-RUNTIME-PROOF.md`](docs/OPERATOR-RUNTIME-PROOF.md) for the clean-clone three-process and browser command-center proof, and [`README-INDEPENDENT.md`](README-INDEPENDENT.md) for endpoint detail.
 
 ## Verified local acceptance
 

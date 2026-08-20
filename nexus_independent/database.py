@@ -266,11 +266,24 @@ class NexusDatabase:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS audit_events_project_idx ON audit_events(project_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS worker_heartbeats (
+                    worker_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    details_json TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    heartbeat_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS worker_heartbeats_heartbeat_idx ON worker_heartbeats(heartbeat_at DESC);
                 """
             )
             self._ensure_column(db, "projects", "tenant_id", "TEXT")
             self._ensure_column(db, "missions", "tenant_id", "TEXT")
             self._ensure_column(db, "missions", "submission_json", "TEXT")
+            self._ensure_column(db, "memory_items", "retired_at", "TEXT")
+            self._ensure_column(db, "memory_items", "retired_by_user_id", "TEXT")
+            self._ensure_column(db, "memory_items", "user_note", "TEXT")
+            self._ensure_column(db, "memory_items", "updated_at", "TEXT")
+            db.execute("UPDATE memory_items SET updated_at=created_at WHERE updated_at IS NULL")
             db.execute("CREATE INDEX IF NOT EXISTS projects_tenant_idx ON projects(tenant_id, project_id)")
             db.execute("CREATE INDEX IF NOT EXISTS missions_tenant_created_idx ON missions(tenant_id, created_at DESC)")
             now = utc_now()
@@ -602,6 +615,55 @@ class NexusDatabase:
             rows = db.execute("SELECT * FROM memory_items WHERE tenant_id=? AND project_id=? ORDER BY created_at DESC LIMIT ?", (tenant_id, _safe_slug(project_id), limit)).fetchall()
         return [{**dict(row), "content": json.loads(row["content_json"]), "provenance": json.loads(row["provenance_json"])} for row in rows]
 
+    def set_memory_lifecycle(self, tenant_id: str, project_id: str, memory_id: str, actor_user_id: str, action: str, note: str | None = None) -> dict[str, Any] | None:
+        if action not in {"retire", "restore", "annotate"}:
+            raise ValueError("unsupported memory lifecycle action")
+        now = utc_now()
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM memory_items WHERE memory_id=? AND tenant_id=? AND project_id=?", (memory_id, tenant_id, _safe_slug(project_id))).fetchone()
+            if row is None:
+                return None
+            if action == "retire":
+                db.execute("UPDATE memory_items SET status='superseded', retired_at=?, retired_by_user_id=?, user_note=COALESCE(?, user_note), updated_at=? WHERE memory_id=?", (now, actor_user_id, note, now, memory_id))
+            elif action == "restore":
+                db.execute("UPDATE memory_items SET status='active', retired_at=NULL, retired_by_user_id=NULL, user_note=COALESCE(?, user_note), updated_at=? WHERE memory_id=?", (note, now, memory_id))
+            else:
+                db.execute("UPDATE memory_items SET user_note=?, updated_at=? WHERE memory_id=?", (note or "", now, memory_id))
+            updated = db.execute("SELECT * FROM memory_items WHERE memory_id=?", (memory_id,)).fetchone()
+        result = dict(updated)
+        result["content"] = json.loads(result["content_json"])
+        result["provenance"] = json.loads(result["provenance_json"])
+        return result
+
+    def project_context(self, tenant_id: str, project_id: str) -> dict[str, Any]:
+        safe_project = _safe_slug(project_id)
+        with self.connect() as db:
+            missions = [self._mission_row(row) for row in db.execute(self._mission_select() + " WHERE m.tenant_id=? AND m.project_id=? ORDER BY m.updated_at DESC LIMIT 8", (tenant_id, safe_project)).fetchall()]
+            memories = self.list_memory(tenant_id, safe_project, 8)
+            outcomes = self.list_outcomes(tenant_id, safe_project, 5)
+        latest = missions[0] if missions else None
+        active = [mission for mission in missions if mission and mission.get("status") in {"QUEUED", "EXECUTING", "PAUSED"}]
+        failed = [mission for mission in missions if mission and mission.get("status") in {"FAILED", "BLOCKED", "PARTIAL"}]
+        if latest is None:
+            next_action = "State an objective to create the first durable mission."
+        elif active:
+            next_action = "Monitor the active durable mission; the worker will persist evidence or an explicit blocker."
+        elif failed:
+            next_action = "Inspect the persisted failure evidence and decide whether to continue from the checkpoint or revise the objective."
+        else:
+            next_action = "Review the latest verified outcome, then continue from its checkpoint or state the next objective."
+        return {
+            "project_id": safe_project,
+            "current_objective": latest.get("intent") if latest else None,
+            "latest_mission": latest,
+            "active_missions": active,
+            "blockers": [{"mission_id": item["mission_id"], "status": item["status"], "error": item.get("error")} for item in failed],
+            "discovered": [{"memory_id": item["memory_id"], "source": item["source"], "reality_state": item["reality_state"], "verification_state": item["content"].get("verification_state", "UNKNOWN"), "status": item["status"], "user_note": item.get("user_note")} for item in memories],
+            "outcomes": outcomes,
+            "next_action": next_action,
+            "continuity": {"memory_count": len(memories), "mission_count": len(missions), "active_count": len(active), "blocker_count": len(failed)},
+        }
+
     def list_outcomes(self, tenant_id: str, project_id: str, limit: int = 100) -> list[dict[str, Any]]:
         with self.connect() as db:
             rows = db.execute("SELECT * FROM outcomes WHERE tenant_id=? AND project_id=? ORDER BY updated_at DESC LIMIT ?", (tenant_id, _safe_slug(project_id), limit)).fetchall()
@@ -703,13 +765,27 @@ class NexusDatabase:
         counts = {row["status"].lower(): row["count"] for row in rows}
         return {"queued": counts.get("queued", 0), "leased": counts.get("leased", 0), "completed": counts.get("completed", 0), "failed": counts.get("failed", 0)}
 
+    def heartbeat_worker(self, worker_id: str, status: str = "ACTIVE", details: dict[str, Any] | None = None) -> None:
+        now = utc_now()
+        with self.connect() as db:
+            db.execute("""INSERT INTO worker_heartbeats(worker_id, status, details_json, started_at, heartbeat_at) VALUES(?,?,?,?,?)
+                          ON CONFLICT(worker_id) DO UPDATE SET status=excluded.status, details_json=excluded.details_json, heartbeat_at=excluded.heartbeat_at""", (worker_id, status, json.dumps(details or {}), now, now))
+
+    def worker_health(self, stale_seconds: int = 15) -> dict[str, Any]:
+        threshold = (datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)).isoformat()
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM worker_heartbeats ORDER BY heartbeat_at DESC").fetchall()
+        workers = [{**dict(row), "details": json.loads(row["details_json"])} for row in rows]
+        active = [worker for worker in workers if worker["status"] == "ACTIVE" and worker["heartbeat_at"] >= threshold]
+        return {"status": "ACTIVE" if active else "UNAVAILABLE", "active_count": len(active), "workers": workers[:10], "stale_after_seconds": stale_seconds}
+
     def health(self) -> dict[str, Any]:
         self.migrate()
         with self.connect() as db:
             missions = db.execute("SELECT COUNT(*) AS count FROM missions").fetchone()["count"]
             projects = db.execute("SELECT COUNT(*) AS count FROM projects").fetchone()["count"]
             users = db.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
-        return {"database": "sqlite", "path": str(self.path), "missions": missions, "projects": projects, "users": users, "queue": self.queue_health(), "status": "HEALTHY"}
+        return {"database": "sqlite", "path": str(self.path), "missions": missions, "projects": projects, "users": users, "queue": self.queue_health(), "workers": self.worker_health(), "status": "HEALTHY"}
 
     def provider_history(self, tenant_id: str) -> dict[str, dict[str, Any]]:
         """Return persisted provider execution facts for one tenant only."""

@@ -36,6 +36,7 @@ class ProductSettings:
     api_host: str
     api_port: int
     web_origins: tuple[str, ...]
+    database_url: str = ""
     github_api_base: str = "https://api.github.com"
     github_token: str | None = field(default=None, repr=False)
     github_timeout_seconds: int = 20
@@ -53,11 +54,24 @@ class ProductSettings:
         product_root = Path(os.getenv("NEXUS_PRODUCT_ROOT", Path(__file__).resolve().parents[1])).resolve()
         data_root = Path(os.getenv("NEXUS_DATA_ROOT", product_root / ".nexus_product")).resolve()
         database_path = Path(os.getenv("NEXUS_DATABASE_PATH", data_root / "nexus.db")).resolve()
+        explicit_database_url = os.getenv("NEXUS_DATABASE_URL")
+        conventional_database_url = os.getenv("DATABASE_URL")
+        if explicit_database_url:
+            database_url = explicit_database_url
+        elif conventional_database_url and conventional_database_url.startswith(("sqlite://", "postgres://", "postgresql://")):
+            database_url = conventional_database_url
+        else:
+            database_url = f"sqlite:///{database_path}"
+        if database_url.startswith("sqlite://"):
+            configured_path = database_url[len("sqlite://"):]
+            if configured_path and configured_path != ":memory:":
+                database_path = Path(configured_path).expanduser().resolve()
         state_root = Path(os.getenv("NEXUS_STATE_ROOT", data_root / "state")).resolve()
         allowed_root = Path(os.getenv("NEXUS_ALLOWED_FILESYSTEM_ROOT", product_root)).resolve()
         return cls(
             product_root=product_root,
             database_path=database_path,
+            database_url=database_url,
             state_root=state_root,
             allowed_filesystem_root=allowed_root,
             github_repository=os.getenv("NEXUS_GITHUB_REPOSITORY", "Themeta-verse/Nexus"),

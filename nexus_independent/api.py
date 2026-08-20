@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from .schemas import LoginRequest, MissionSubmission, ProjectCreateRequest
+from .schemas import LoginRequest, MemoryLifecycleRequest, MissionSubmission, ProjectCreateRequest
 from .service import StandaloneMissionService
 
 
@@ -86,6 +86,23 @@ def create_app(service: StandaloneMissionService | None = None) -> FastAPI:
         except PermissionError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
+    @app.post("/api/v1/projects/{project_id}/memory/{memory_id}")
+    def update_memory(project_id: str, memory_id: str, request: MemoryLifecycleRequest, identity: dict = Depends(principal)) -> dict:
+        try:
+            memory = runtime.update_memory(identity, project_id, memory_id, request.action, request.note)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        if memory is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory record not found")
+        return {"memory": memory}
+
+    @app.get("/api/v1/projects/{project_id}/context")
+    def project_context(project_id: str, identity: dict = Depends(principal)) -> dict:
+        try:
+            return runtime.project_context(identity, project_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
     @app.get("/api/v1/projects/{project_id}/outcomes")
     def project_outcomes(project_id: str, limit: int = Query(default=100, ge=1, le=200), identity: dict = Depends(principal)) -> dict:
         try:
@@ -114,6 +131,10 @@ def create_app(service: StandaloneMissionService | None = None) -> FastAPI:
             return runtime.database_inspection(identity)
         except PermissionError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    @app.get("/api/v1/diagnostics")
+    def diagnostics(identity: dict = Depends(principal)) -> dict:
+        return runtime.diagnostics(identity)
 
     @app.post("/api/v1/missions", status_code=status.HTTP_202_ACCEPTED)
     def create_mission(submission: MissionSubmission, identity: dict = Depends(principal)) -> dict:

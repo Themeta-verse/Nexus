@@ -39,6 +39,11 @@ class ProjectCreateRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=160)
 
 
+class MemoryLifecycleRequest(BaseModel):
+    action: Literal["retire", "restore", "annotate"]
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class MissionResponse(BaseModel):
     mission_id: str
     project_id: str

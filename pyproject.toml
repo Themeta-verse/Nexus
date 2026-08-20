@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 nexus-independent = "nexus_independent.cli:main"
+nexus = "nexus_independent.cli:main"
 
 [tool.setuptools]
 packages = ["runtime", "nexus_independent"]

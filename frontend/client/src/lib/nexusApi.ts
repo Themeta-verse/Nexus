@@ -58,15 +58,17 @@ export type ProductHealth = {
   authentication?: { mode: string; bootstrap_owner_configured: boolean; session_hours: number };
   queue?: { worker_command: string; lease_seconds: number; max_attempts: number };
   github?: { transport: string; authentication: string };
+  runtime_state?: { state: string; reason: string; configured_database_url?: string; database_engine?: string; database_portability?: string };
 };
 
-export type MemoryItem = { memory_id: string; mission_id?: string; source: string; confidence: string; freshness_at: string; reality_state: string; status: string; content: Record<string, unknown> };
+export type MemoryItem = { memory_id: string; mission_id?: string; source: string; confidence: string; freshness_at: string; reality_state: string; status: string; user_note?: string | null; retired_at?: string | null; content: Record<string, unknown> };
 export type Outcome = { outcome_id: string; mission_id: string; state: string; reality_state: string; verification_state: string; updated_at: string; summary: Record<string, unknown> };
 export type AuditEvent = { audit_id: number; action: string; outcome: string; mission_id?: string; created_at: string; detail: Record<string, unknown> };
 export type ProviderState = { identity?: string; status: string; availability?: boolean; limitations?: string[]; authentication?: string; authorization?: string; risk?: string; side_effects?: boolean; execution_state?: string; last_execution?: string | null; last_successful_execution?: string | null; last_failure_state?: string | null; last_verification_state?: string };
 export type MissionEvent = { event_id: number; event_type: string; payload: Record<string, unknown>; created_at: string };
 export type MissionEvidence = { evidence_id: number; capability?: string; provider?: string; observation_id?: string; verification_state?: string; reality?: string; created_at: string };
 export type DatabaseInspection = { database: "sqlite"; tenant_id: string; row_counts: Record<string, number>; integrity_check: string; foreign_keys: boolean; journal_mode: string };
+export type ProjectContext = { project_id: string; current_objective: string | null; latest_mission: MissionSummary | null; active_missions: MissionSummary[]; blockers: Array<{ mission_id: string; status: string; error?: string | null }>; discovered: Array<{ memory_id: string; source: string; reality_state: string; verification_state: string; status: string; user_note?: string | null }>; outcomes: Outcome[]; next_action: string; continuity: { memory_count: number; mission_count: number; active_count: number; blocker_count: number } };
 
 const configuredBase = import.meta.env.VITE_NEXUS_API_BASE_URL?.replace(/\/$/, "");
 export const apiBase = configuredBase || "http://127.0.0.1:8787";
@@ -117,11 +119,14 @@ export const nexusApi = {
   createProject: (projectId: string, displayName: string) => request<Project>("/api/v1/projects", { method: "POST", body: JSON.stringify({ project_id: projectId, display_name: displayName }) }, true),
   listMissions: (projectId: string) => request<{ project_id: string; missions: MissionSummary[] }>(`/api/v1/projects/${encodeURIComponent(projectId)}/missions`, undefined, true),
   listMemory: (projectId: string) => request<{ project_id: string; memory: MemoryItem[] }>(`/api/v1/projects/${encodeURIComponent(projectId)}/memory`, undefined, true),
+  updateMemory: (projectId: string, memoryId: string, action: "retire" | "restore" | "annotate", note?: string) => request<{ memory: MemoryItem }>(`/api/v1/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(memoryId)}`, { method: "POST", body: JSON.stringify({ action, note }) }, true),
+  projectContext: (projectId: string) => request<ProjectContext>(`/api/v1/projects/${encodeURIComponent(projectId)}/context`, undefined, true),
   listOutcomes: (projectId: string) => request<{ project_id: string; outcomes: Outcome[] }>(`/api/v1/projects/${encodeURIComponent(projectId)}/outcomes`, undefined, true),
   listAuditEvents: (projectId?: string) => request<{ audit_events: AuditEvent[] }>(`/api/v1/audit-events${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`, undefined, true),
   listCapabilities: () => request<{ capabilities: Array<{ capability: string; provider: string; risk: string; side_effects: boolean }> }>("/api/v1/capabilities", undefined, true),
   listProviders: () => request<{ providers: Record<string, ProviderState> }>("/api/v1/providers", undefined, true),
   databaseInspection: () => request<DatabaseInspection>("/api/v1/operator/database", undefined, true),
+  diagnostics: () => request<ProductHealth>("/api/v1/diagnostics", undefined, true),
   missionEvents: (missionId: string) => request<{ mission_id: string; events: MissionEvent[] }>(`/api/v1/missions/${encodeURIComponent(missionId)}/events`, undefined, true),
   missionEvidence: (missionId: string) => request<{ mission_id: string; evidence: MissionEvidence[] }>(`/api/v1/missions/${encodeURIComponent(missionId)}/evidence`, undefined, true),
   listCheckpoints: (missionId: string) => request<{ mission_id: string; checkpoints: Array<{ checkpoint_id: string; state: string; created_at: string }> }>(`/api/v1/missions/${encodeURIComponent(missionId)}/checkpoints`, undefined, true),

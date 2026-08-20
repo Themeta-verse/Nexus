@@ -70,7 +70,7 @@ try {
   if (!await setInput('input[type="email"]', email)) throw new Error('Email control unavailable');
   if (!await setInput('input[type="password"]', password)) throw new Error('Password control unavailable');
   await evaluate(`Array.from(document.querySelectorAll('button')).find((button) => button.textContent.includes('Open secure workspace'))?.click()`);
-  await eventually(`document.body.innerText.includes('MISSION COMPILER')`, 'authenticated command workspace');
+  await eventually(`document.body.innerText.includes('OBJECTIVE')`, 'authenticated command workspace');
   await setInput('input[placeholder="new project"]', 'ui-operator-proof');
   await evaluate(`Array.from(document.querySelectorAll('button')).find((button) => button.textContent.trim() === 'create project')?.click()`);
   await eventually(`Array.from(document.querySelectorAll('select option')).some((option) => option.value === 'ui-operator-proof')`, 'project creation through UI');

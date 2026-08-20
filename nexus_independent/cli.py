@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 
 import uvicorn
 
@@ -12,6 +14,9 @@ from .service import StandaloneMissionService
 
 
 def main() -> None:
+    known_commands = {"serve", "worker", "bootstrap", "run", "ask", "health", "migrate", "backup", "restore", "recover", "-h", "--help"}
+    if len(sys.argv) > 1 and sys.argv[1] not in known_commands:
+        sys.argv.insert(1, "ask")
     parser = argparse.ArgumentParser(prog="nexus-independent", description="Independent NEXUS product runtime")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve", help="start the authenticated standalone NEXUS API")
@@ -47,6 +52,13 @@ def main() -> None:
     recover.add_argument("mission_id")
     recover.add_argument("--email", required=True)
     recover.add_argument("--password", required=True)
+    ask = sub.add_parser("ask", help="queue a governed objective or read durable project continuity from ordinary language")
+    ask.add_argument("intent")
+    ask.add_argument("--email", default=os.getenv("NEXUS_CLI_EMAIL"))
+    ask.add_argument("--password", default=os.getenv("NEXUS_CLI_PASSWORD"))
+    ask.add_argument("--project-id", default=os.getenv("NEXUS_CLI_PROJECT", "local"))
+    ask.add_argument("--scope", default=os.getenv("NEXUS_GITHUB_REPOSITORY", "Themeta-verse/Nexus"))
+    ask.add_argument("--mode", choices=["REAL_READ", "SIMULATION"], default="REAL_READ")
     args = parser.parse_args()
     settings = ProductSettings.from_env()
     service = StandaloneMissionService(settings)
@@ -79,6 +91,34 @@ def main() -> None:
             raise SystemExit("authentication failed")
         result = service.recover(session["user"], args.mission_id)
         print(json.dumps(result or {"status": "NOT_FOUND"}, indent=2, default=str))
+    elif args.command == "ask":
+        if not args.email or not args.password:
+            raise SystemExit("ask requires product credentials via --email/--password or NEXUS_CLI_EMAIL/NEXUS_CLI_PASSWORD")
+        session = service.login(args.email, args.password)
+        if not session:
+            raise SystemExit("authentication failed")
+        principal = session["user"]
+        normalized = args.intent.strip().lower()
+        context_questions = {"where were we?", "where were we", "what changed?", "what changed", "what should happen next?", "what should happen next", "what next?", "what next"}
+        if normalized in context_questions:
+            print(json.dumps({"kind": "project_context", "context": service.project_context(principal, args.project_id)}, indent=2, default=str))
+            return
+        context = service.project_context(principal, args.project_id)
+        if normalized in {"continue", "continue."}:
+            latest = context.get("latest_mission")
+            if latest is None:
+                print(json.dumps({"kind": "continuation", "status": "NO_DURABLE_MISSION", "next_action": context["next_action"]}, indent=2))
+                return
+            print(json.dumps({"kind": "continuation", "result": service.continue_mission(principal, latest["mission_id"])}, indent=2, default=str))
+            return
+        capabilities = ["repository.metadata.read"]
+        if any(term in normalized for term in ("analyze", "project", "repository", "code", "blocking", "unfinished")):
+            capabilities = ["repository.read", "filesystem.read"]
+        elif any(term in normalized for term in ("browser", "web page", "website")):
+            capabilities = ["browser.read"]
+        payload = MissionSubmission(intent=args.intent, project_id=args.project_id, scope=args.scope, mode=args.mode, capabilities=capabilities)
+        queued = service.enqueue_mission(principal, payload)
+        print(json.dumps({"kind": "queued_objective", "mission": queued, "required_worker": "nexus worker", "capabilities": capabilities}, indent=2, default=str))
 
 
 if __name__ == "__main__":
