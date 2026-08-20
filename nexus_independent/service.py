@@ -62,6 +62,27 @@ class StandaloneMissionService:
             self.database.grant_project_member(legacy_project, user["user_id"], "owner")
         return {"tenant": tenant, "user": self._public_identity(user), "project": project, "adopted_projects": adopted}
 
+    def setup_status(self) -> dict[str, Any]:
+        return {"initial_owner_setup_available": self.database.initial_owner_setup_available(), "owner_registration_available": self.settings.allow_owner_registration}
+
+    def setup_initial_owner(self, email: str, password: str) -> dict[str, Any]:
+        created = self.database.create_initial_owner(email, password, self.settings.bootstrap_tenant_name, self.settings.bootstrap_project_id)
+        session = self.login(email, password)
+        if session is None:
+            raise RuntimeError("initial owner session could not be created")
+        self.database.add_audit_event(created["tenant"]["tenant_id"], created["user"]["user_id"], "auth.initial_owner_setup", "success", {"project_id": created["project"]["project_id"]})
+        return session
+
+    def register_owner_workspace(self, email: str, password: str) -> dict[str, Any]:
+        if not self.settings.allow_owner_registration:
+            raise PermissionError("owner registration is disabled by product configuration")
+        created = self.database.create_registered_owner(email, password)
+        session = self.login(email, password)
+        if session is None:
+            raise RuntimeError("owner workspace session could not be created")
+        self.database.add_audit_event(created["tenant"]["tenant_id"], created["user"]["user_id"], "auth.owner_workspace_registration", "success", {"project_id": created["project"]["project_id"]})
+        return session
+
     def login(self, email: str, password: str) -> dict[str, Any] | None:
         user = self.database.authenticate_password(email, password)
         if not user:
@@ -362,6 +383,8 @@ class StandaloneMissionService:
             "status": private["status"],
             "database": {"status": "HEALTHY"},
             "authorization_boundary": "product authentication and tenant membership are required for mission data",
+            "initial_owner_setup_available": self.database.initial_owner_setup_available(),
+            "owner_registration_available": self.settings.allow_owner_registration,
         }
 
     def diagnostics(self, principal: dict[str, Any]) -> dict[str, Any]:

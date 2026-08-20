@@ -34,6 +34,11 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class OwnerSetupRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=12, max_length=1024)
+
+
 class ProjectCreateRequest(BaseModel):
     project_id: str = Field(min_length=1, max_length=100)
     display_name: str = Field(min_length=1, max_length=160)

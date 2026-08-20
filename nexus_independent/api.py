@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from .schemas import LoginRequest, MemoryLifecycleRequest, MissionSubmission, ProjectCreateRequest
+from .schemas import LoginRequest, MemoryLifecycleRequest, MissionSubmission, OwnerSetupRequest, ProjectCreateRequest
 from .service import StandaloneMissionService
 
 
@@ -51,6 +51,28 @@ def create_app(service: StandaloneMissionService | None = None) -> FastAPI:
         if not session:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid email or password")
         return session
+
+    @app.get("/api/v1/setup/status")
+    def setup_status() -> dict:
+        return runtime.setup_status()
+
+    @app.post("/api/v1/setup/owner", status_code=status.HTTP_201_CREATED)
+    def setup_owner(request: OwnerSetupRequest) -> dict:
+        try:
+            return runtime.setup_initial_owner(request.email, request.password)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="initial owner setup is unavailable for this runtime") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    @app.post("/api/v1/auth/register", status_code=status.HTTP_201_CREATED)
+    def register_owner(request: OwnerSetupRequest) -> dict:
+        try:
+            return runtime.register_owner_workspace(request.email, request.password)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="owner workspace registration is disabled for this runtime") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     @app.post("/api/v1/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
     def logout(token: str = Depends(bearer_token)) -> Response:

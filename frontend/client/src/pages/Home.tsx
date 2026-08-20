@@ -21,7 +21,7 @@ import {
   TerminalSquare,
   UserRound,
 } from "lucide-react";
-import { apiBase, AuditEvent, Capability, clearProductSession, DatabaseInspection, MemoryItem, MissionEvidence, MissionEvent, MissionSummary, nexusApi, Outcome, persistProductSession, ProductHealth, ProductSession, ProjectContext, ProviderState, readProductSession } from "@/lib/nexusApi";
+import { apiBase, AuditEvent, Capability, clearProductSession, configureApiBase, DatabaseInspection, getApiBase, MemoryItem, MissionEvidence, MissionEvent, MissionSummary, nexusApi, Outcome, persistProductSession, ProductHealth, ProductSession, ProjectContext, ProviderState, readProductSession } from "@/lib/nexusApi";
 
 const capabilities: Array<{ id: Capability; label: string; detail: string; icon: typeof Globe2 }> = [
   { id: "repository.metadata.read", label: "Metadata", detail: "one bounded repository identity read", icon: Radar },
@@ -35,7 +35,7 @@ const terminalStatuses = new Set(["COMPLETED", "PARTIAL", "FAILED", "BLOCKED"]);
 
 function StatusMark({ state }: { state: string }) {
   const normalized = state.toLowerCase();
-  const tone = normalized.includes("verified") || normalized.includes("healthy") || normalized.includes("completed")
+  const tone = normalized.includes("verified") || normalized.includes("healthy") || normalized.includes("completed") || normalized.includes("ready") || normalized.includes("observed") || normalized.includes("authenticated")
     ? "is-good"
     : normalized.includes("failed") || normalized.includes("blocked") || normalized.includes("unavailable")
       ? "is-blocked"
@@ -72,25 +72,50 @@ function MissionLine({ mission }: { mission: MissionSummary }) {
   );
 }
 
-function LoginPanel({ onAuthenticated }: { onAuthenticated: (session: ProductSession) => void }) {
+function LoginPanel({ onAuthenticated, runtimeReady, setupAvailable, registrationAvailable, healthError, onRuntimeConfigured }: { onAuthenticated: (session: ProductSession) => void; runtimeReady: boolean; setupAvailable: boolean; registrationAvailable: boolean; healthError: string | null; onRuntimeConfigured: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [runtimeUrl, setRuntimeUrl] = useState(() => getApiBase());
+  const [screen, setScreen] = useState<"signin" | "setup" | "register" | "connect">(runtimeReady ? (setupAvailable ? "setup" : registrationAvailable ? "register" : "signin") : "connect");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (runtimeReady && screen === "connect" && getApiBase()) setScreen(setupAvailable ? "setup" : registrationAvailable ? "register" : "signin");
+  }, [registrationAvailable, runtimeReady, screen, setupAvailable]);
   const signIn = async () => {
     setSubmitting(true); setError(null);
     try { onAuthenticated(await nexusApi.login(email, password)); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Authentication could not be completed."); }
+    catch (cause) { setError(cause instanceof Error && cause.message.includes("invalid email or password") ? "No matching product account or password. Existing accounts can only be recovered locally by the product owner; browser resets are intentionally unavailable." : cause instanceof Error ? cause.message : "Authentication could not be completed."); }
     finally { setSubmitting(false); }
   };
+  const setupOwner = async () => {
+    setSubmitting(true); setError(null);
+    try { onAuthenticated(await nexusApi.setupOwner(email, password)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "First owner setup could not be completed."); }
+    finally { setSubmitting(false); }
+  };
+  const registerOwner = async () => {
+    setSubmitting(true); setError(null);
+    try { onAuthenticated(await nexusApi.registerOwner(email, password)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Owner workspace registration could not be completed."); }
+    finally { setSubmitting(false); }
+  };
+  const connectRuntime = () => {
+    setError(null);
+    try { configureApiBase(runtimeUrl); onRuntimeConfigured(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Runtime URL could not be saved."); }
+  };
+  const isSetup = screen === "setup";
+  const isRegistration = screen === "register";
   return (
     <section className="login-panel" aria-labelledby="login-title">
-      <div className="login-copy"><span className="mono-label">PRODUCT SECURITY / REQUIRED</span><h2 id="login-title">Authenticate before the ledger becomes visible.</h2><p>The command center reads tenant-scoped projects and mission receipts only after product-owned session authentication.</p></div>
+      <div className="login-copy"><span className="mono-label">{runtimeReady ? "PRODUCT SECURITY / REQUIRED" : "RUNTIME CONNECTION / REQUIRED"}</span><h2 id="login-title">{screen === "connect" ? "Connect your NEXUS runtime first." : isSetup ? "Create the first product owner." : isRegistration ? "Create your owner workspace." : "Authenticate before the ledger becomes visible."}</h2><p>{screen === "connect" ? "This interface is a cockpit, not a hosted API. Add the HTTPS URL of the independently running NEXUS API; no credentials are sent until the runtime responds." : isSetup ? "This one-time action is available only while the product database has no users. It creates the owner, primary project, and a scoped session." : isRegistration ? "This configured self-service path creates a new isolated tenant, owner, and primary project. It cannot access any existing NEXUS workspace." : "The command center reads tenant-scoped projects and mission receipts only after product-owned session authentication."}</p>{healthError && <p className="runtime-explanation">{healthError}</p>}</div>
       <div className="login-form">
-        <label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" placeholder="owner@example.com" /></label>
-        <label>Password<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" placeholder="Your product password" onKeyDown={(event) => event.key === "Enter" && void signIn()} /></label>
+        {screen === "connect" ? <label>Runtime API URL<input value={runtimeUrl} onChange={(event) => setRuntimeUrl(event.target.value)} type="url" autoComplete="url" placeholder="https://nexus-api.your-domain.example" onKeyDown={(event) => event.key === "Enter" && connectRuntime()} /></label> : <><label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" placeholder="owner@example.com" /></label><label>{isSetup || isRegistration ? "New password (12+ characters)" : "Password"}<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete={isSetup || isRegistration ? "new-password" : "current-password"} placeholder={isSetup || isRegistration ? "Choose a product password" : "Your product password"} onKeyDown={(event) => event.key === "Enter" && void (isSetup ? setupOwner() : isRegistration ? registerOwner() : signIn())} /></label></>}
         {error && <p className="login-error"><CircleAlert size={15} />{error}</p>}
-        <button className="run-button" disabled={submitting || !email || !password} onClick={() => void signIn()}>{submitting ? <LoaderCircle className="spin" size={17} /> : <KeyRound size={17} />}{submitting ? "Verifying identity" : "Open secure workspace"}</button>
+        {screen === "connect" ? <button className="run-button" disabled={!runtimeUrl.trim()} onClick={connectRuntime}><Radar size={17} />Connect runtime</button> : <button className="run-button" disabled={submitting || !email || !password || ((isSetup || isRegistration) && password.length < 12)} onClick={() => void (isSetup ? setupOwner() : isRegistration ? registerOwner() : signIn())}>{submitting ? <LoaderCircle className="spin" size={17} /> : <KeyRound size={17} />}{submitting ? "Verifying identity" : isSetup ? "Create owner workspace" : isRegistration ? "Create isolated workspace" : "Open secure workspace"}</button>}
+        {runtimeReady && screen !== "connect" && <button className="login-link" onClick={() => setScreen("connect")}>Change runtime URL</button>}
+        {runtimeReady && !setupAvailable && !registrationAvailable && <p className="recovery-note">Owner registration is disabled for this runtime. For recovery, run the documented local owner bootstrap command on the API host; web reset is deliberately not exposed.</p>}
       </div>
     </section>
   );
@@ -124,6 +149,7 @@ export default function Home() {
   const selectedCount = selected.length;
   const latestMission = mission ?? missions[0] ?? null;
   const watchingExecution = Boolean(latestMission && !terminalStatuses.has(latestMission.status));
+  const runtimeReady = Boolean(health && !healthError);
 
   const refresh = useCallback(async () => {
     try {
@@ -142,6 +168,7 @@ export default function Home() {
       }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Independent API unavailable";
+      setHealth(null);
       setHealthError(message);
       if (message.includes("401")) { clearProductSession(); setSession(null); setMissions([]); setMission(null); setProjectContext(null); }
     }
@@ -244,7 +271,7 @@ export default function Home() {
 
         {session && <section className="cockpit-context" aria-label="Current project intelligence"><div className="section-heading"><div><div className="heading-line"><EvidenceStamp state={projectContext?.latest_mission?.verification_status || "UNKNOWN"} label="current intelligence" /><span className="mono-label">NOW / DISCOVERED / NEXT</span></div><h2>{projectContext?.current_objective || "No current objective in this project."}</h2></div><span className="selection-count">{projectContext?.continuity.mission_count ?? 0} durable missions</span></div><div className="cockpit-grid"><article><span className="mono-label">NEXUS IS DOING</span><strong>{projectContext?.active_missions.length ? projectContext.active_missions.map((item) => item.status).join(" · ") : "Awaiting an objective"}</strong><p>{watchingExecution ? "Worker state is refreshed from the authenticated API every two seconds." : "No active queue record currently requires execution."}</p></article><article><span className="mono-label">DISCOVERED</span><strong>{projectContext?.discovered.length ?? 0} persisted facts</strong><p>{projectContext?.discovered[0] ? `${projectContext.discovered[0].source} · ${projectContext.discovered[0].reality_state} · ${projectContext.discovered[0].verification_state}` : "No project evidence has been retained yet."}</p></article><article><span className="mono-label">BLOCKERS</span><strong>{projectContext?.blockers.length ? projectContext.blockers.map((item) => item.status).join(" · ") : "None observed"}</strong><p>{projectContext?.blockers[0]?.error || "Failures remain explicit and are never converted into completion."}</p></article><article><span className="mono-label">NEXT</span><strong>{projectContext?.next_action || "Authenticate and select a project."}</strong><p>Derived from durable missions, memory, outcomes, and queue state—not a client-side prediction.</p></article></div></section>}
 
-        {!session ? <LoginPanel onAuthenticated={onAuthenticated} /> : <section className="mission-composer" aria-labelledby="mission-title">
+        {!session ? <LoginPanel onAuthenticated={onAuthenticated} runtimeReady={runtimeReady} setupAvailable={Boolean(health?.initial_owner_setup_available)} registrationAvailable={Boolean(health?.owner_registration_available)} healthError={healthError} onRuntimeConfigured={() => void refresh()} /> : <section className="mission-composer" aria-labelledby="mission-title">
           <div className="section-heading"><div><div className="heading-line"><EvidenceStamp state={health?.authorization_boundary ? "AUTHENTICATED" : "UNKNOWN"} label="tenant scope" /><span className="mono-label">01 / OBJECTIVE</span></div><h2 id="mission-title">Tell NEXUS what you want accomplished.</h2></div><span className="selection-count">{selectedCount.toString().padStart(2, "0")} evidence capabilities</span></div>
           <div className="tenant-toolbar"><span className="mono-label">TENANT SCOPE</span><select value={activeProject} onChange={(event) => setActiveProject(event.target.value)} aria-label="Active tenant project">{session.projects.map((project) => <option key={project.project_id} value={project.project_id}>{project.display_name} · {project.role}</option>)}</select>{session.user.role === "owner" && <span className="project-create"><input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="new project" aria-label="New project name" /><button onClick={() => void createProject()} disabled={!projectName.trim()}>create project</button></span>}<span className="live-indicator"><StatusMark state={watchingExecution ? "EXECUTING" : health?.status || "UNKNOWN"} />{watchingExecution ? "live worker watch / 2s" : "durable status sync / 8s"}</span></div>
           <div className="composer-grid"><div className="intent-column"><label htmlFor="mission-intent">Mission command</label><textarea id="mission-intent" value={intent} onChange={(event) => setIntent(event.target.value)} spellCheck={false} /><div className="mode-switch" role="group" aria-label="Mission mode"><button className={mode === "SIMULATION" ? "is-active" : ""} onClick={() => setMode("SIMULATION")}>Simulation</button><button className={mode === "REAL_READ" ? "is-active" : ""} onClick={() => setMode("REAL_READ")}>Real read</button></div><p className="helper-text">Submission creates a durable queue record. A separate read-only worker claims, executes, verifies, and persists the mission.</p></div>

@@ -319,6 +319,60 @@ class NexusDatabase:
             row = db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
         return dict(row)
 
+    def initial_owner_setup_available(self) -> bool:
+        with self.connect() as db:
+            return db.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"] == 0
+
+    def create_initial_owner(self, email: str, password: str, tenant_name: str = "NEXUS", project_id: str = "local") -> dict[str, Any]:
+        """Atomically create the sole first owner; never serves as an account recovery bypass."""
+        normalized = email.strip().lower()
+        if "@" not in normalized or len(normalized) > 320:
+            raise ValueError("a valid email address is required")
+        password_hash = _hash_password(password)
+        tenant_id = _safe_slug(tenant_name)
+        safe_project = _safe_slug(project_id)
+        now = utc_now()
+        user_id = f"user-{uuid.uuid4()}"
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]:
+                raise PermissionError("initial owner setup is unavailable after the first product account exists")
+            db.execute("INSERT INTO tenants(tenant_id, display_name, created_at) VALUES(?,?,?)", (tenant_id, tenant_name.strip() or "NEXUS", now))
+            db.execute(
+                "INSERT INTO users(user_id, tenant_id, email, password_hash, role, active, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                (user_id, tenant_id, normalized, password_hash, "owner", 1, now, now),
+            )
+            db.execute("INSERT INTO projects(project_id, tenant_id, display_name, created_at, updated_at) VALUES(?,?,?,?,?)", (safe_project, tenant_id, "Primary command center", now, now))
+            db.execute("INSERT INTO project_memberships(project_id, user_id, role, created_at) VALUES(?,?,?,?)", (safe_project, user_id, "owner", now))
+            user = db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+            project = db.execute("SELECT * FROM projects WHERE project_id=?", (safe_project,)).fetchone()
+        return {"tenant": {"tenant_id": tenant_id, "display_name": tenant_name.strip() or "NEXUS"}, "user": dict(user), "project": dict(project)}
+
+    def create_registered_owner(self, email: str, password: str) -> dict[str, Any]:
+        """Create an isolated tenant owner without joining or revealing another tenant."""
+        normalized = email.strip().lower()
+        if "@" not in normalized or len(normalized) > 320:
+            raise ValueError("a valid email address is required")
+        password_hash = _hash_password(password)
+        tenant_id = f"tenant-{uuid.uuid4().hex[:16]}"
+        project_id = f"workspace-{uuid.uuid4().hex[:12]}"
+        now = utc_now()
+        user_id = f"user-{uuid.uuid4()}"
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM users WHERE email=?", (normalized,)).fetchone():
+                raise ValueError("a product account already exists for this email; sign in instead")
+            db.execute("INSERT INTO tenants(tenant_id, display_name, created_at) VALUES(?,?,?)", (tenant_id, "NEXUS workspace", now))
+            db.execute(
+                "INSERT INTO users(user_id, tenant_id, email, password_hash, role, active, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                (user_id, tenant_id, normalized, password_hash, "owner", 1, now, now),
+            )
+            db.execute("INSERT INTO projects(project_id, tenant_id, display_name, created_at, updated_at) VALUES(?,?,?,?,?)", (project_id, tenant_id, "Primary command center", now, now))
+            db.execute("INSERT INTO project_memberships(project_id, user_id, role, created_at) VALUES(?,?,?,?)", (project_id, user_id, "owner", now))
+            user = db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+            project = db.execute("SELECT * FROM projects WHERE project_id=?", (project_id,)).fetchone()
+        return {"tenant": {"tenant_id": tenant_id, "display_name": "NEXUS workspace"}, "user": dict(user), "project": dict(project)}
+
     def authenticate_password(self, email: str, password: str) -> dict[str, Any] | None:
         with self.connect() as db:
             row = db.execute("SELECT * FROM users WHERE email=? AND active=1", (email.strip().lower(),)).fetchone()

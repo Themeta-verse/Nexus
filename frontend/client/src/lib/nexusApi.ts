@@ -59,6 +59,8 @@ export type ProductHealth = {
   queue?: { worker_command: string; lease_seconds: number; max_attempts: number };
   github?: { transport: string; authentication: string };
   runtime_state?: { state: string; reason: string; configured_database_url?: string; database_engine?: string; database_portability?: string };
+  initial_owner_setup_available?: boolean;
+  owner_registration_available?: boolean;
 };
 
 export type MemoryItem = { memory_id: string; mission_id?: string; source: string; confidence: string; freshness_at: string; reality_state: string; status: string; user_note?: string | null; retired_at?: string | null; content: Record<string, unknown> };
@@ -71,8 +73,24 @@ export type DatabaseInspection = { database: "sqlite"; tenant_id: string; row_co
 export type ProjectContext = { project_id: string; current_objective: string | null; latest_mission: MissionSummary | null; active_missions: MissionSummary[]; blockers: Array<{ mission_id: string; status: string; error?: string | null }>; discovered: Array<{ memory_id: string; source: string; reality_state: string; verification_state: string; status: string; user_note?: string | null }>; outcomes: Outcome[]; next_action: string; continuity: { memory_count: number; mission_count: number; active_count: number; blocker_count: number } };
 
 const configuredBase = import.meta.env.VITE_NEXUS_API_BASE_URL?.replace(/\/$/, "");
-export const apiBase = configuredBase || "http://127.0.0.1:8787";
+const runtimeBaseStorageKey = "nexus.product.api-base.v1";
+export const apiBase = configuredBase || "";
 const sessionStorageKey = "nexus.product.session.v1";
+
+export function getApiBase(): string {
+  if (typeof window !== "undefined") {
+    const override = window.localStorage.getItem(runtimeBaseStorageKey)?.trim().replace(/\/$/, "");
+    if (override) return override;
+  }
+  return configuredBase || "";
+}
+
+export function configureApiBase(value: string): string {
+  const normalized = value.trim().replace(/\/$/, "");
+  if (!/^https?:\/\//.test(normalized)) throw new Error("Enter a complete runtime URL beginning with http:// or https://");
+  window.localStorage.setItem(runtimeBaseStorageKey, normalized);
+  return normalized;
+}
 
 export function readProductSession(): ProductSession | null {
   try {
@@ -93,10 +111,12 @@ export function persistProductSession(session: ProductSession): ProductSession {
 }
 
 async function request<T>(path: string, init?: RequestInit, authenticated = false): Promise<T> {
+  const base = getApiBase();
+  if (!base) throw new Error("NEXUS runtime is not connected. Add the URL of your independently running API before signing in.");
   const session = authenticated ? readProductSession() : null;
   const headers: Record<string, string> = { "Content-Type": "application/json", ...(init?.headers as Record<string, string> || {}) };
   if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
-  const response = await fetch(`${apiBase}${path}`, { ...init, headers });
+  const response = await fetch(`${base}${path}`, { ...init, headers });
   const payload = await response.json().catch(() => ({}));
   if (response.status === 401 && authenticated) clearProductSession();
   if (!response.ok) throw new Error(payload.detail || `API request failed (${response.status})`);
@@ -106,6 +126,8 @@ async function request<T>(path: string, init?: RequestInit, authenticated = fals
 export const nexusApi = {
   health: () => request<ProductHealth>("/health"),
   authenticatedHealth: () => request<ProductHealth>("/api/v1/health", undefined, true),
+  setupOwner: async (email: string, password: string) => persistProductSession(await request<ProductSession>("/api/v1/setup/owner", { method: "POST", body: JSON.stringify({ email, password }) })),
+  registerOwner: async (email: string, password: string) => persistProductSession(await request<ProductSession>("/api/v1/auth/register", { method: "POST", body: JSON.stringify({ email, password }) })),
   login: async (email: string, password: string) => persistProductSession(await request<ProductSession>("/api/v1/auth/login", { method: "POST", body: JSON.stringify({ email, password }) })),
   logout: async () => {
     try {

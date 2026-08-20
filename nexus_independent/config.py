@@ -46,6 +46,7 @@ class ProductSettings:
     session_hours: int = 12
     bootstrap_owner_email: str | None = None
     bootstrap_owner_password: str | None = field(default=None, repr=False)
+    allow_owner_registration: bool = False
     bootstrap_tenant_name: str = "NEXUS"
     bootstrap_project_id: str = "local"
 
@@ -89,6 +90,7 @@ class ProductSettings:
             session_hours=_positive_int(os.getenv("NEXUS_SESSION_HOURS"), 12),
             bootstrap_owner_email=os.getenv("NEXUS_BOOTSTRAP_OWNER_EMAIL") or None,
             bootstrap_owner_password=os.getenv("NEXUS_BOOTSTRAP_OWNER_PASSWORD") or None,
+            allow_owner_registration=_bool(os.getenv("NEXUS_ALLOW_OWNER_REGISTRATION"), False),
             bootstrap_tenant_name=os.getenv("NEXUS_BOOTSTRAP_TENANT", "NEXUS"),
             bootstrap_project_id=os.getenv("NEXUS_BOOTSTRAP_PROJECT", "local"),
         )
