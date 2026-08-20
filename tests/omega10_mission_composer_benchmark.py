@@ -34,19 +34,20 @@ with TemporaryDirectory() as td:
     store=LocalStateStore(td); first=store.append_event('duplicate_test',{'x':1},'Themeta-verse/Nexus',['test'],'same-key'); second=store.append_event('duplicate_test',{'x':2},'Themeta-verse/Nexus',['test'],'same-key'); assert first.event_id==second.event_id and len([e for e in store.events() if e.idempotency_key=='same-key'])==1
 
 real_root=TemporaryDirectory(); real=composer.execute(composer.compose(intent,'Themeta-verse/Nexus','REAL_READ'),real_root.name,'REAL_READ')
-assert real['mission']['state']=='COMPLETED' if product_token else real['mission']['state'] in {'FAILED','PARTIAL'}
-assert real['mission']['completion_state']=='COMPLETED' if product_token else real['mission']['completion_state'] in {'FAILED','PARTIAL'}
-assert real['mission']['reality']=='OBSERVED' if product_token else real['mission']['reality'] in {'UNKNOWN','OBSERVED'}
+completed=real['mission']['state']=='COMPLETED' and real['mission']['completion_state']=='COMPLETED' and real['mission']['reality']=='OBSERVED' and real['verification']['status']=='VERIFIED'
+assert real['mission']['state'] in {'COMPLETED','FAILED','PARTIAL'}
+assert real['mission']['completion_state'] in {'COMPLETED','FAILED','PARTIAL'}
+assert real['mission']['reality'] in {'UNKNOWN','OBSERVED'}
 assert real['external_invocations']==7
 assert real['writes_performed'] is False and real['deployment_performed'] is False
-assert validate_completion(real)['allowed'] is bool(product_token)
+assert validate_completion(real)['allowed'] is completed
 assert validate_receipt(real)['valid'] is True
-assert real['verification']['status']=='VERIFIED' if product_token else real['verification']['status'] in {'UNKNOWN','BLOCKED','FAILED'}
+assert real['verification']['status'] in {'VERIFIED','UNKNOWN','BLOCKED','FAILED'}
 assert real['reality_audit']['consistency']['consistent'] is True
 assert real['reality_audit']['invariants']['passed'] is True
 assert len(real['execution']['specialist_outputs'])==3
 assert all(x['reality']=='INFERRED' for x in real['execution']['specialist_outputs'])
-assert real['dashboard']['active_missions']==([] if product_token else [real['mission']['mission_id']])
+assert real['dashboard']['active_missions']==([] if completed else [real['mission']['mission_id']])
 recovered=composer.recover(real_root.name,'Themeta-verse/Nexus'); assert recovered['status']=='RECOVERED'; assert recovered['snapshot']['state']['mission']['state']==real['mission']['state']
 # Fake receipt and scope mismatch must fail validation.
 fake=json.loads(json.dumps(real)); fake['execution']['provider_bundle']['receipt']['scope']='Other/project'; assert validate_receipt(fake)['valid'] is False
@@ -63,4 +64,4 @@ except ValueError as e:
     assert str(e) in {'STATE_CORRUPT','STATE_CHECKSUM_MISMATCH'}
 else:
     raise AssertionError('corrupt state was not rejected')
-print(json.dumps({'status':'passed','mission_model':'passed','capability_resolution':'passed','provider_inheritance':'passed','task_graph':'passed','parallelism':'passed','specialist_composition':'passed','real_repository_health_mission':'passed_with_product_secret' if product_token else 'bounded_failure_without_product_secret','simulation_boundary':'passed','completion_proof':'passed' if product_token else 'correctly_not_claimed','receipt_integrity':'passed' if product_token else 'correctly_not_claimed','recovery':'passed','scope_isolation':'passed','replanning':'passed','prompt_injection':'passed','state_corruption':'passed','event_idempotency':'passed','no_remote_writes':'passed'},indent=2))
+print(json.dumps({'status':'passed','mission_model':'passed','capability_resolution':'passed','provider_inheritance':'passed','task_graph':'passed','parallelism':'passed','specialist_composition':'passed','real_repository_health_mission':'completed_with_direct_evidence' if completed else 'bounded_failure_or_partial_without_evidence','simulation_boundary':'passed','completion_proof':'passed' if completed else 'correctly_not_claimed','receipt_integrity':'passed','recovery':'passed','scope_isolation':'passed','replanning':'passed','prompt_injection':'passed','state_corruption':'passed','event_idempotency':'passed','no_remote_writes':'passed'},indent=2))

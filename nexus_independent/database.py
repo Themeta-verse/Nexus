@@ -711,6 +711,52 @@ class NexusDatabase:
             users = db.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
         return {"database": "sqlite", "path": str(self.path), "missions": missions, "projects": projects, "users": users, "queue": self.queue_health(), "status": "HEALTHY"}
 
+    def provider_history(self, tenant_id: str) -> dict[str, dict[str, Any]]:
+        """Return persisted provider execution facts for one tenant only."""
+        with self.connect() as db:
+            rows = db.execute(
+                """SELECT provider, receipt_json, created_at FROM provider_receipts
+                   WHERE tenant_id=? ORDER BY receipt_id DESC""",
+                (tenant_id,),
+            ).fetchall()
+        history: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            provider = row["provider"]
+            receipt = json.loads(row["receipt_json"] or "{}")
+            current = history.setdefault(provider, {"last_execution": None, "last_successful_execution": None, "last_failure_state": None, "last_verification_state": "UNKNOWN"})
+            if current["last_execution"] is None:
+                current["last_execution"] = row["created_at"]
+                current["last_verification_state"] = receipt.get("verification", "UNKNOWN")
+            if receipt.get("status") in {"EXECUTED", "SUCCESS"} and current["last_successful_execution"] is None:
+                current["last_successful_execution"] = row["created_at"]
+            if receipt.get("failure_state") and current["last_failure_state"] is None:
+                current["last_failure_state"] = receipt["failure_state"]
+        return history
+
+    def tenant_inspection(self, tenant_id: str) -> dict[str, Any]:
+        """Return owner-authorized, tenant-scoped SQLite facts for operator inspection."""
+        with self.connect() as db:
+            counts = {
+                "tenants": db.execute("SELECT COUNT(*) AS count FROM tenants WHERE tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "users": db.execute("SELECT COUNT(*) AS count FROM users WHERE tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "sessions": db.execute("SELECT COUNT(*) AS count FROM sessions s JOIN users u ON u.user_id=s.user_id WHERE u.tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "projects": db.execute("SELECT COUNT(*) AS count FROM projects WHERE tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "missions": db.execute("SELECT COUNT(*) AS count FROM missions WHERE tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "mission_queue": db.execute("SELECT COUNT(*) AS count FROM mission_queue q JOIN missions m ON m.mission_id=q.mission_id WHERE m.tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "mission_events": db.execute("SELECT COUNT(*) AS count FROM mission_events e JOIN missions m ON m.mission_id=e.mission_id WHERE m.tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "mission_evidence": db.execute("SELECT COUNT(*) AS count FROM mission_evidence e JOIN missions m ON m.mission_id=e.mission_id WHERE m.tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "observations": db.execute("SELECT COUNT(*) AS count FROM observations WHERE tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "provider_receipts": db.execute("SELECT COUNT(*) AS count FROM provider_receipts WHERE tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "memory_items": db.execute("SELECT COUNT(*) AS count FROM memory_items WHERE tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "outcomes": db.execute("SELECT COUNT(*) AS count FROM outcomes WHERE tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "checkpoints": db.execute("SELECT COUNT(*) AS count FROM checkpoints WHERE tenant_id=?", (tenant_id,)).fetchone()["count"],
+                "audit_events": db.execute("SELECT COUNT(*) AS count FROM audit_events WHERE tenant_id=?", (tenant_id,)).fetchone()["count"],
+            }
+            integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
+            foreign_keys = db.execute("PRAGMA foreign_keys").fetchone()[0]
+            journal_mode = db.execute("PRAGMA journal_mode").fetchone()[0]
+        return {"database": "sqlite", "tenant_id": tenant_id, "row_counts": counts, "integrity_check": integrity, "foreign_keys": bool(foreign_keys), "journal_mode": journal_mode}
+
     def backup_to(self, destination: str | Path) -> Path:
         """Create a consistent SQLite backup through the database engine, including WAL state."""
         target = Path(destination).expanduser().resolve()

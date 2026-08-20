@@ -94,7 +94,7 @@ def run() -> dict:
             "reality": completed["reality"],
             "verification": completed["verification_status"],
             "writes_performed": result["execution"]["writes_performed"],
-            "manus_runtime_required": False,
+            "external_task_runtime_required": False,
         }
 
 

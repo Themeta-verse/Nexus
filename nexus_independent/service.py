@@ -234,6 +234,16 @@ class StandaloneMissionService:
         self.database.add_audit_event(principal["tenant_id"], principal["user_id"], "mission.recover", "success", {"recovery_status": recovery.get("status")}, project_id=record["project_id"], mission_id=mission_id)
         return {"mission": self.get_mission(principal, mission_id, include_result=False), "recovery": recovery}
 
+    def continue_mission(self, principal: dict[str, Any], mission_id: str) -> dict[str, Any] | None:
+        """Recover the persisted canonical state; never fabricate or re-run a completed mission."""
+        recovered = self.recover(principal, mission_id)
+        if recovered is None:
+            return None
+        mission = recovered["mission"]
+        self.database.add_event(mission_id, "mission_continued", {"recovery_status": recovered["recovery"].get("status"), "execution_restarted": False})
+        self.database.add_audit_event(principal["tenant_id"], principal["user_id"], "mission.continue", "success", {"recovery_status": recovered["recovery"].get("status")}, project_id=mission["project_id"], mission_id=mission_id)
+        return recovered
+
     def control_mission(self, principal: dict[str, Any], mission_id: str, control: str) -> dict[str, Any] | None:
         record = self._mission_for_principal(principal, mission_id, "operator")
         if record is None:
@@ -268,18 +278,30 @@ class StandaloneMissionService:
         return self.database.list_checkpoints(principal["tenant_id"], mission_id)
 
     def capabilities(self, principal: dict[str, Any]) -> list[dict[str, Any]]:
-        del principal
-        return [
-            {"capability": "repository.metadata.read", "provider": "github-read", "risk": "read-only", "side_effects": False},
-            {"capability": "repository.read", "provider": "github-read", "risk": "read-only", "side_effects": False},
-            {"capability": "browser.read", "provider": "browser-read", "risk": "read-only", "side_effects": False},
-            {"capability": "filesystem.read", "provider": "filesystem-read", "risk": "bounded-read-only", "side_effects": False},
+        provider_state = self.providers(principal)
+        contracts = [
+            ("repository.metadata.read", "github-read", "read-only"),
+            ("repository.read", "github-read", "read-only"),
+            ("browser.read", "browser-read", "read-only"),
+            ("filesystem.read", "filesystem-read", "bounded-read-only"),
         ]
+        return [{"capability": capability, "provider": provider, "risk": risk, "side_effects": False, "status": provider_state.get(provider, {}).get("status", "UNAVAILABLE"), "availability": bool(provider_state.get(provider, {}).get("availability")), "authorization": "READ_ONLY_AUTHORIZED" if provider_state.get(provider, {}).get("availability") else "NOT_AVAILABLE"} for capability, provider, risk in contracts]
 
     def providers(self, principal: dict[str, Any]) -> dict[str, Any]:
-        del principal
+        history = self.database.provider_history(principal["tenant_id"])
         composer = self._composer()
-        return {name: provider.health() for name, provider in composer.providers.items() if hasattr(provider, "health")}
+        providers: dict[str, Any] = {}
+        for name, provider in composer.providers.items():
+            if not hasattr(provider, "health"):
+                continue
+            current = provider.health()
+            providers[name] = {**current, "identity": name, "authorization": "READ_ONLY_AUTHORIZED" if current.get("availability") else "NOT_AVAILABLE", "risk": "LOW_READ_ONLY", "side_effects": False, "execution_state": "EXECUTED" if history.get(name, {}).get("last_execution") else "NOT_EXECUTED", **history.get(name, {})}
+        return providers
+
+    def database_inspection(self, principal: dict[str, Any]) -> dict[str, Any]:
+        if principal["role"] != "owner":
+            raise PermissionError("only a tenant owner can inspect product database facts")
+        return self.database.tenant_inspection(principal["tenant_id"])
 
     def health(self) -> dict[str, Any]:
         composer = self._composer()
@@ -294,7 +316,6 @@ class StandaloneMissionService:
             "authentication": {"mode": "product-owned-session-bearer", "bootstrap_owner_configured": bool(self.settings.bootstrap_owner_email and self.settings.bootstrap_owner_password), "session_hours": self.settings.session_hours},
             "queue": {"worker_command": "nexus-independent worker", "lease_seconds": self.settings.worker_lease_seconds, "max_attempts": self.settings.queue_max_attempts},
             "github": {"transport": "direct-github-rest", "authentication": "PRODUCT_MANAGED_TOKEN" if self.settings.github_token else "PUBLIC_READ_ONLY"},
-            "manus_runtime_required": False,
         }
 
     def public_health(self) -> dict[str, Any]:
@@ -304,5 +325,4 @@ class StandaloneMissionService:
             "status": "HEALTHY",
             "database": {"status": "HEALTHY"},
             "authorization_boundary": "product authentication and tenant membership are required for mission data",
-            "manus_runtime_required": False,
         }

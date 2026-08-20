@@ -108,6 +108,13 @@ def create_app(service: StandaloneMissionService | None = None) -> FastAPI:
     def providers(identity: dict = Depends(principal)) -> dict:
         return {"providers": runtime.providers(identity)}
 
+    @app.get("/api/v1/operator/database")
+    def database_inspection(identity: dict = Depends(principal)) -> dict:
+        try:
+            return runtime.database_inspection(identity)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
     @app.post("/api/v1/missions", status_code=status.HTTP_202_ACCEPTED)
     def create_mission(submission: MissionSubmission, identity: dict = Depends(principal)) -> dict:
         try:
@@ -173,6 +180,17 @@ def create_app(service: StandaloneMissionService | None = None) -> FastAPI:
     def recover(mission_id: str, identity: dict = Depends(principal)) -> dict:
         try:
             result = runtime.recover(identity, mission_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        if result is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="mission not found")
+        result["mission"] = public_mission(result["mission"])
+        return result
+
+    @app.post("/api/v1/missions/{mission_id}/continue")
+    def continue_mission(mission_id: str, identity: dict = Depends(principal)) -> dict:
+        try:
+            result = runtime.continue_mission(identity, mission_id)
         except PermissionError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
         if result is None:

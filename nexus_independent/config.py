@@ -1,6 +1,6 @@
 """Explicit configuration for the independently owned NEXUS product runtime.
 
-No setting is sourced from Manus configuration. Credentials remain process-local
+No setting is sourced from development tooling. Credentials remain process-local
 environment variables and are never persisted in the product database.
 """
 from __future__ import annotations

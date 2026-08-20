@@ -53,6 +53,11 @@ jobs:
           pnpm run check
           pnpm run build
 
+      - name: Run operator security and process proof
+        run: |
+          PYTHONPATH=. python tests/operator_security_hardening.py
+          PYTHONPATH=. python scripts/operator_runtime_proof.py
+
       - name: Reject environment files
         shell: bash
         run: |

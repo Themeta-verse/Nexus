@@ -2,7 +2,7 @@
 
 The benchmark deliberately executes a simulation mission only. It uses a local
 HTTP fixture for the direct GitHub adapter and never invokes an external write,
-browser, remote credential, or Manus capability.
+browser, remote credential, or external task capability.
 """
 from __future__ import annotations
 
@@ -106,6 +106,16 @@ def run() -> dict:
         assert capability_response.status_code == 200 and len(capability_response.json()["capabilities"]) == 4
         provider_response = client.get("/api/v1/providers", headers=headers)
         assert provider_response.status_code == 200 and "github-read" in provider_response.json()["providers"]
+        github_provider = provider_response.json()["providers"]["github-read"]
+        assert github_provider["identity"] == "github-read"
+        assert github_provider["side_effects"] is False
+        assert github_provider["execution_state"] in {"EXECUTED", "NOT_EXECUTED"}
+        assert client.get("/api/v1/capabilities", headers=headers).json()["capabilities"][0]["authorization"] in {"READ_ONLY_AUTHORIZED", "NOT_AVAILABLE"}
+        database_inspection = client.get("/api/v1/operator/database", headers=headers)
+        assert database_inspection.status_code == 200
+        assert database_inspection.json()["database"] == "sqlite"
+        assert database_inspection.json()["integrity_check"] == "ok"
+        assert database_inspection.json()["row_counts"]["mission_evidence"] >= 1
 
         controlled = client.post("/api/v1/missions", headers=headers, json={"intent": "Pause before evidence", "project_id": "benchmark", "mode": "SIMULATION", "capabilities": ["repository.metadata.read"]})
         assert controlled.status_code == 202
@@ -124,8 +134,21 @@ def run() -> dict:
         assert principal
         recovered = restarted.recover(principal, mission_id)
         assert recovered and recovered["recovery"]["status"] in {"RECOVERED", "PARTIAL", "COMPLETED", "UNKNOWN"}
+        continued = client.post(f"/api/v1/missions/{mission_id}/continue", headers=headers)
+        assert continued.status_code == 200
+        assert continued.json()["mission"]["mission_id"] == mission_id
+        assert any(event["event_type"] == "mission_continued" for event in client.get(f"/api/v1/missions/{mission_id}/events", headers=headers).json()["events"])
         assert settings.database_path.exists()
         assert (settings.state_root / "benchmark" / "current.json").exists()
+
+        operator = service.database.create_user(principal["tenant_id"], "operator@example.test", "operator benchmark password", role="operator")
+        service.database.grant_project_member("benchmark", operator["user_id"], "operator")
+        operator_login = client.post("/api/v1/auth/login", json={"email": "operator@example.test", "password": "operator benchmark password"})
+        assert operator_login.status_code == 200
+        operator_headers = {"Authorization": f"Bearer {operator_login.json()['access_token']}"}
+        assert client.post("/api/v1/projects", headers=operator_headers, json={"project_id": "forbidden", "display_name": "Forbidden"}).status_code == 403
+        assert client.get("/api/v1/operator/database", headers=operator_headers).status_code == 403
+        assert client.get("/api/v1/me", headers={"Authorization": "Bearer malformed-session-token"}).status_code == 401
 
         second = service.bootstrap_owner("other@example.test", "another benchmark password", "Other Tenant", "other-project")
         second_login = client.post("/api/v1/auth/login", json={"email": "other@example.test", "password": "another benchmark password"})
@@ -165,7 +188,7 @@ def run() -> dict:
                 "no_external_side_effects": True,
             },
             "runtime": "nexus_independent queue -> MissionComposer -> LocalStateStore + SQLite",
-            "manus_runtime_required": False,
+            "external_task_runtime_required": False,
         }
 
 

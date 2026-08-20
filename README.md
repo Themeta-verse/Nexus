@@ -43,11 +43,11 @@ For the browser client, copy `frontend/.env.example` to `frontend/.env.local`, s
 
 `NEXUS_GITHUB_TOKEN` is optional for public read endpoints and should be injected only by the product host when authenticated GitHub reads are needed. It is never accepted through mission inputs or returned in receipts. `NEXUS_ALLOWED_FILESYSTEM_ROOT` bounds filesystem evidence. `NEXUS_WEB_ORIGINS` must name the command-center origin in a deployed environment.
 
-Read [`docs/INDEPENDENT-ARCHITECTURE.md`](docs/INDEPENDENT-ARCHITECTURE.md) for the source dependency map, [`docs/OPERATIONS.md`](docs/OPERATIONS.md) for independent operations and backup/restore, and [`README-INDEPENDENT.md`](README-INDEPENDENT.md) for endpoint detail.
+Read [`docs/INDEPENDENT-ARCHITECTURE.md`](docs/INDEPENDENT-ARCHITECTURE.md) for the source dependency map, [`docs/OPERATIONS.md`](docs/OPERATIONS.md) for independent operations and backup/restore, [`docs/OPERATOR-RUNTIME-PROOF.md`](docs/OPERATOR-RUNTIME-PROOF.md) for the clean-clone three-process and browser command-center proof, and [`README-INDEPENDENT.md`](README-INDEPENDENT.md) for endpoint detail.
 
 ## Verified local acceptance
 
-`tests/final_transition_e2e.py` runs a **real bounded filesystem read** through authenticated API submission, the durable queue, an independent worker, verification, SQLite memory/outcome/checkpoint projections, service restart, and recovery. It proves no Manus runtime is required and asserts `writes_performed: false`.
+`tests/final_transition_e2e.py` runs a **real bounded filesystem read** through authenticated API submission, the durable queue, an independent worker, verification, SQLite memory/outcome/checkpoint projections, service restart, and recovery. `scripts/operator_runtime_proof.py` starts the real API, worker, and frontend as separate local processes, inspects the actual SQLite records, restarts all processes, and continues from persisted state. Both assert `writes_performed: false`.
 
 ## Current limitations
 
